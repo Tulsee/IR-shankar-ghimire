@@ -47,7 +47,7 @@ def search_publications(query: str = "", page: int = 1, size: int = 30):
                     "title",
                     "link",
                     "authors",
-                    "date",
+                    "published_date",
                     "abstract",
                     "score",
                 ]

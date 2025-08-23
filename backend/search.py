@@ -72,7 +72,7 @@ def _normalize_record(r: Dict) -> Dict:
     authors = _ensure_list_of_str(r.get("authors", []))
     abstract = r.get("abstract", "") or ""
     out = dict(r)
-    out["date"] = date_val
+    out["da" "te"] = date_val
     out["authors"] = authors
     out["abstract"] = abstract
     return out
@@ -119,7 +119,19 @@ class SearchEngine:
             if not isinstance(item.get("authors", []), list):
                 item["authors"] = _ensure_list_of_str(item.get("authors", []))
 
-            return_fields = ["title", "link", "authors", "date", "abstract", "score"]
-            results.append({k: item.get(k, "") for k in return_fields})
+            return_fields = [
+                "title",
+                "link",
+                "authors",
+                "published_date",
+                "abstract",
+                "score",
+            ]
+            # Map the normalized date field back to published_date for frontend compatibility
+            formatted_item = {
+                k: item.get(k, "") for k in return_fields if k != "published_date"
+            }
+            formatted_item["published_date"] = item.get("date", "")
+            results.append(formatted_item)
 
         return results
