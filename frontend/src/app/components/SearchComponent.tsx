@@ -46,8 +46,15 @@ export default function SearchComponent({ onResultsChange }: SearchComponentProp
 
   // Clear search function
   const handleClearSearch = () => {
+    // Clear any pending debounce timeout
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current);
+    }
+
     setQuery("");
+    setDebouncedQuery(""); // Also clear debounced query immediately
     setCurrentPage(1);
+    searchPublications("", 1); // Trigger search with empty query to show all results
   };
 
   // Search function
@@ -145,10 +152,8 @@ export default function SearchComponent({ onResultsChange }: SearchComponentProp
 
   // Effect to trigger search when debounced query changes
   useEffect(() => {
-    if (debouncedQuery !== "") {
-      setCurrentPage(1);
-      searchPublications(debouncedQuery, 1);
-    }
+    setCurrentPage(1);
+    searchPublications(debouncedQuery, 1);
   }, [debouncedQuery, searchPublications]);
 
   return (
