@@ -101,7 +101,7 @@ export default function DocumentClassification() {
                   id="model-select"
                   value={modelType}
                   onChange={(e) => setModelType(e.target.value as "naive_bayes" | "logistic_regression")}
-                  className="w-full appearance-none bg-white border-2 border-gray-300 rounded-xl px-4 py-3 pr-10 text-gray-900 font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all duration-200 hover:border-gray-400"
+                  className="w-full appearance-none bg-white border-2 border-gray-300 rounded-xl px-4 py-3 pr-10 text-gray-900 font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all duration-200 hover:border-gray-400 cursor-pointer"
                 >
                   <option value="naive_bayes">Naive Bayes Classifier</option>
                   <option value="logistic_regression">Logistic Regression</option>
@@ -183,7 +183,7 @@ export default function DocumentClassification() {
                     "The government announced new economic policies to stimulate growth and reduce unemployment. Parliament will vote on the budget next week."
                   )
                 }
-                className="text-left p-4 bg-purple-100 hover:bg-purple-200 text-purple-800 rounded-lg text-sm transition-all duration-200 hover:shadow-md transform hover:-translate-y-0.5"
+                className="text-left p-4 bg-purple-100 hover:bg-purple-200 text-purple-800 rounded-lg text-sm transition-all duration-200 hover:shadow-md transform hover:-translate-y-0.5 cursor-pointer"
               >
                 <div className="font-semibold mb-1">Politics</div>
                 <div className="text-xs opacity-80">Government policies & parliament</div>
@@ -194,7 +194,7 @@ export default function DocumentClassification() {
                     "The company reported strong quarterly earnings driven by increased sales and successful product launches in emerging markets."
                   )
                 }
-                className="text-left p-4 bg-blue-100 hover:bg-blue-200 text-blue-800 rounded-lg text-sm transition-all duration-200 hover:shadow-md transform hover:-translate-y-0.5"
+                className="text-left p-4 bg-blue-100 hover:bg-blue-200 text-blue-800 rounded-lg text-sm transition-all duration-200 hover:shadow-md transform hover:-translate-y-0.5 cursor-pointer"
               >
                 <div className="font-semibold mb-1">Business</div>
                 <div className="text-xs opacity-80">Earnings & market performance</div>
@@ -205,7 +205,7 @@ export default function DocumentClassification() {
                     "The clinical trial showed promising results for the new cancer treatment, with patients experiencing significant improvement in their condition."
                   )
                 }
-                className="text-left p-4 bg-green-100 hover:bg-green-200 text-green-800 rounded-lg text-sm transition-all duration-200 hover:shadow-md transform hover:-translate-y-0.5"
+                className="text-left p-4 bg-green-100 hover:bg-green-200 text-green-800 rounded-lg text-sm transition-all duration-200 hover:shadow-md transform hover:-translate-y-0.5 cursor-pointer"
               >
                 <div className="font-semibold mb-1">Health</div>
                 <div className="text-xs opacity-80">Medical research & treatment</div>
@@ -235,7 +235,7 @@ export default function DocumentClassification() {
             <button
               onClick={handleClassify}
               disabled={loading || !text.trim()}
-              className="flex-1 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 disabled:from-gray-400 disabled:to-gray-500 text-white px-8 py-4 rounded-xl font-semibold text-lg shadow-lg hover:shadow-xl disabled:shadow-none transition-all duration-200 transform hover:-translate-y-0.5 disabled:translate-y-0 disabled:cursor-not-allowed"
+              className="flex-1 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 disabled:from-gray-400 disabled:to-gray-500 text-white px-8 py-4 rounded-xl font-semibold text-lg shadow-lg hover:shadow-xl disabled:shadow-none transition-all duration-200 transform hover:-translate-y-0.5 disabled:translate-y-0 disabled:cursor-not-allowed cursor-pointer"
             >
               {loading ? (
                 <div className="flex items-center justify-center gap-3">
@@ -259,7 +259,7 @@ export default function DocumentClassification() {
 
             <button
               onClick={handleClear}
-              className="bg-gray-500 hover:bg-gray-600 text-white px-6 py-4 rounded-xl font-semibold transition-all duration-200 hover:shadow-lg transform hover:-translate-y-0.5"
+              className="bg-gray-500 hover:bg-gray-600 text-white px-6 py-4 rounded-xl font-semibold transition-all duration-200 hover:shadow-lg transform hover:-translate-y-0.5 cursor-pointer"
             >
               Clear
             </button>

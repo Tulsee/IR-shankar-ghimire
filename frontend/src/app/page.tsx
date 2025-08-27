@@ -56,7 +56,7 @@ export default function Home() {
           <nav className="flex space-x-8" aria-label="Tabs">
             <button
               onClick={() => setActiveTab("search")}
-              className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors duration-200 ${
+              className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors duration-200 cursor-pointer ${
                 activeTab === "search"
                   ? "border-blue-500 text-blue-600"
                   : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
@@ -77,7 +77,7 @@ export default function Home() {
 
             <button
               onClick={() => setActiveTab("classification")}
-              className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors duration-200 ${
+              className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors duration-200 cursor-pointer ${
                 activeTab === "classification"
                   ? "border-blue-500 text-blue-600"
                   : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"

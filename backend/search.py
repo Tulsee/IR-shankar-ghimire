@@ -54,13 +54,29 @@ def preprocess_text(text: str) -> str:
 
 
 # ---------- normalization ----------
-def _ensure_list_of_str(v):
+def _ensure_list_of_authors(v):
+    """Ensure authors is a list of author objects with name and profile."""
     if not v:
         return []
     if isinstance(v, list):
-        # if someone accidentally stored dicts with {"name": ...}
-        if len(v) and isinstance(v[0], dict):
+        # if already a list of author objects, return as is
+        if len(v) and isinstance(v[0], dict) and "name" in v[0]:
+            return v
+        # if list of strings, convert to author objects
+        return [{"name": str(x).strip(), "profile": None} for x in v if str(x).strip()]
+    # if a single string slipped in, convert to author object
+    return [{"name": str(v).strip(), "profile": None}]
+
+
+def _ensure_list_of_str(v):
+    """Convert authors to list of strings for search indexing."""
+    if not v:
+        return []
+    if isinstance(v, list):
+        # if list of author objects, extract names
+        if len(v) and isinstance(v[0], dict) and "name" in v[0]:
             return [str(d.get("name", "")).strip() for d in v if isinstance(d, dict)]
+        # if list of strings, return as is
         return [str(x).strip() for x in v]
     # if a single string slipped in, keep it as a single element
     return [str(v).strip()]
@@ -69,10 +85,10 @@ def _ensure_list_of_str(v):
 def _normalize_record(r: Dict) -> Dict:
     # unify date
     date_val = r.get("date") or r.get("published_date") or ""
-    authors = _ensure_list_of_str(r.get("authors", []))
+    authors = _ensure_list_of_authors(r.get("authors", []))
     abstract = r.get("abstract", "") or ""
     out = dict(r)
-    out["da" "te"] = date_val
+    out["published_date"] = date_val
     out["authors"] = authors
     out["abstract"] = abstract
     return out
@@ -88,7 +104,14 @@ class SearchEngine:
         self.searchable_content = []
         for pub in self.publications:
             title = pub.get("title", "")
-            authors_text = " ".join(pub.get("authors", []))
+            # Extract author names for search indexing
+            authors_objects = pub.get("authors", [])
+            authors_text = " ".join(
+                [
+                    author.get("name", "") if isinstance(author, dict) else str(author)
+                    for author in authors_objects
+                ]
+            )
             abstract = pub.get("abstract", "")
             blob = f"{preprocess_text(title)} {preprocess_text(authors_text)} {preprocess_text(abstract)}"
             self.searchable_content.append(blob)
@@ -114,11 +137,7 @@ class SearchEngine:
             item = dict(self.publications[i])  # copy
             item["score"] = round(score, 2)
 
-            # Keep your frontend happy
-            # authors already normalized to list[str]; ensure exists
-            if not isinstance(item.get("authors", []), list):
-                item["authors"] = _ensure_list_of_str(item.get("authors", []))
-
+            # Ensure required fields exist for frontend
             return_fields = [
                 "title",
                 "link",
@@ -127,11 +146,7 @@ class SearchEngine:
                 "abstract",
                 "score",
             ]
-            # Map the normalized date field back to published_date for frontend compatibility
-            formatted_item = {
-                k: item.get(k, "") for k in return_fields if k != "published_date"
-            }
-            formatted_item["published_date"] = item.get("date", "")
+            formatted_item = {k: item.get(k, "") for k in return_fields}
             results.append(formatted_item)
 
         return results

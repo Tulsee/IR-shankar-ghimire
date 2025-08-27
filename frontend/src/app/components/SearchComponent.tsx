@@ -188,7 +188,7 @@ export default function SearchComponent({ onResultsChange }: SearchComponentProp
               <button
                 type="button"
                 onClick={handleClearSearch}
-                className="absolute inset-y-0 right-0 pr-4 flex items-center text-gray-400 hover:text-gray-600 transition-colors duration-200"
+                className="absolute inset-y-0 right-0 pr-4 flex items-center text-gray-400 hover:text-gray-600 transition-colors duration-200 cursor-pointer"
                 aria-label="Clear search"
               >
                 <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -203,7 +203,7 @@ export default function SearchComponent({ onResultsChange }: SearchComponentProp
               <button
                 type="submit"
                 disabled={loading}
-                className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white px-8 py-3 rounded-xl hover:from-blue-700 hover:to-indigo-700 focus:ring-4 focus:ring-blue-500/20 focus:ring-offset-2 font-semibold transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2 shadow-lg hover:shadow-xl transform hover:-translate-y-0.5"
+                className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white px-8 py-3 rounded-xl hover:from-blue-700 hover:to-indigo-700 focus:ring-4 focus:ring-blue-500/20 focus:ring-offset-2 font-semibold transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2 shadow-lg hover:shadow-xl transform hover:-translate-y-0.5 cursor-pointer"
               >
                 {loading ? (
                   <>
@@ -229,7 +229,7 @@ export default function SearchComponent({ onResultsChange }: SearchComponentProp
                 <button
                   type="button"
                   onClick={handleClearSearch}
-                  className="bg-gray-100 text-gray-700 px-6 py-3 rounded-xl hover:bg-gray-200 focus:ring-4 focus:ring-gray-500/20 font-medium transition-all duration-200 flex items-center space-x-2 shadow-sm hover:shadow-md"
+                  className="bg-gray-100 text-gray-700 px-6 py-3 rounded-xl hover:bg-gray-200 focus:ring-4 focus:ring-gray-500/20 font-medium transition-all duration-200 flex items-center space-x-2 shadow-sm hover:shadow-md cursor-pointer"
                 >
                   <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path
@@ -337,7 +337,7 @@ export default function SearchComponent({ onResultsChange }: SearchComponentProp
             </div>
             <button
               onClick={handleClearSearch}
-              className="mt-6 bg-blue-600 text-white px-6 py-3 rounded-xl hover:bg-blue-700 transition-colors duration-200 font-medium shadow-lg hover:shadow-xl"
+              className="mt-6 bg-blue-600 text-white px-6 py-3 rounded-xl hover:bg-blue-700 transition-colors duration-200 font-medium shadow-lg hover:shadow-xl cursor-pointer"
             >
               Browse All Publications
             </button>
@@ -409,7 +409,18 @@ function PublicationCard({ publication }: { publication: Publication }) {
                 {publication.authors && publication.authors.length > 0
                   ? publication.authors.slice(0, 3).map((author, idx) => (
                       <span key={idx} className="inline-block">
-                        {author}
+                        {author.profile ? (
+                          <a
+                            href={author.profile}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-blue-600 hover:text-blue-800 hover:underline transition-colors duration-200 font-medium"
+                          >
+                            {author.name}
+                          </a>
+                        ) : (
+                          <span>{author.name}</span>
+                        )}
                         {idx < Math.min(publication.authors.length - 1, 2) ? ", " : ""}
                         {idx === 2 && publication.authors.length > 3 ? " and others" : ""}
                       </span>
@@ -466,7 +477,7 @@ function PublicationCard({ publication }: { publication: Publication }) {
                   {publication.abstract.length > 300 && (
                     <button
                       onClick={() => setIsExpanded(!isExpanded)}
-                      className="ml-2 text-blue-600 hover:text-blue-800 font-semibold text-sm underline decoration-2 underline-offset-2 hover:decoration-blue-800 transition-all duration-200"
+                      className="ml-2 text-blue-600 hover:text-blue-800 font-semibold text-sm underline decoration-2 underline-offset-2 hover:decoration-blue-800 transition-all duration-200 cursor-pointer"
                     >
                       {isExpanded ? "Show less" : "Read more"}
                     </button>
@@ -542,7 +553,7 @@ function Pagination({
       <button
         onClick={() => onPageChange(currentPage - 1)}
         disabled={currentPage === 1}
-        className="px-3 py-2 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+        className="px-3 py-2 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
       >
         Previous
       </button>
@@ -552,7 +563,7 @@ function Pagination({
           key={index}
           onClick={() => (typeof page === "number" ? onPageChange(page) : undefined)}
           disabled={typeof page !== "number"}
-          className={`px-3 py-2 rounded-lg ${
+          className={`px-3 py-2 rounded-lg cursor-pointer ${
             page === currentPage
               ? "bg-blue-600 text-white"
               : typeof page === "number"
@@ -567,7 +578,7 @@ function Pagination({
       <button
         onClick={() => onPageChange(currentPage + 1)}
         disabled={currentPage === totalPages}
-        className="px-3 py-2 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+        className="px-3 py-2 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
       >
         Next
       </button>

@@ -38,7 +38,7 @@ if [ -f "$PACKAGE_JSON" ]; then
 # 5. Start crawler scheduler
 echo "Starting crawler scheduler..."
 source "$VENV_DIR/bin/activate"
-nohup python schedule_crawler.py > crawler_scheduler.log 2>&1 &
+nohup python crawler1.py --max-pages 50 --workers 15 --list-workers 6 --listing-headless > crawler_scheduler.log 2>&1 &
 SCHEDULER_PID=$!
         echo "Installing Node.js dependencies..."
         cd "$FRONTEND_DIR"

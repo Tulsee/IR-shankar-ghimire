@@ -24,7 +24,7 @@ export default function QuickSearch({ onQuickSearch }: QuickSearchProps) {
           <button
             key={suggestion}
             onClick={() => onQuickSearch(suggestion)}
-            className="px-3 py-1 bg-blue-50 text-blue-700 rounded-full text-sm hover:bg-blue-100 transition-colors duration-200"
+            className="px-3 py-1 bg-blue-50 text-blue-700 rounded-full text-sm hover:bg-blue-100 transition-colors duration-200 cursor-pointer"
           >
             {suggestion}
           </button>

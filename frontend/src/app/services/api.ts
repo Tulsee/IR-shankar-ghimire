@@ -1,10 +1,15 @@
 // API service for making requests to the backend
 export const API_BASE_URL = "http://127.0.0.1:8000";
 
+export interface Author {
+  name: string;
+  profile: string | null;
+}
+
 export interface Publication {
   title: string;
   link: string;
-  authors: string[];
+  authors: Author[];
   published_date: string;
   abstract: string;
   score: number;

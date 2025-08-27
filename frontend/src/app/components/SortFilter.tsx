@@ -19,7 +19,7 @@ export default function SortFilter({ sortBy, sortOrder, onSortChange }: SortFilt
           <select
             value={sortBy}
             onChange={(e) => onSortChange(e.target.value, sortOrder)}
-            className="border-2 border-gray-300 rounded-md px-3 py-2 text-sm text-gray-900 bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 min-w-[120px]"
+            className="border-2 border-gray-300 rounded-md px-3 py-2 text-sm text-gray-900 bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 min-w-[120px] cursor-pointer"
           >
             {sortOptions.map((option) => (
               <option key={option.value} value={option.value}>
@@ -30,7 +30,7 @@ export default function SortFilter({ sortBy, sortOrder, onSortChange }: SortFilt
 
           <button
             onClick={() => onSortChange(sortBy, sortOrder === "asc" ? "desc" : "asc")}
-            className="flex items-center space-x-1 px-3 py-2 border-2 border-gray-300 rounded-md hover:bg-gray-50 text-sm text-gray-900 bg-white min-w-[100px]"
+            className="flex items-center space-x-1 px-3 py-2 border-2 border-gray-300 rounded-md hover:bg-gray-50 text-sm text-gray-900 bg-white min-w-[100px] cursor-pointer"
           >
             <span>{sortOrder === "asc" ? "Ascending" : "Descending"}</span>
             <svg
