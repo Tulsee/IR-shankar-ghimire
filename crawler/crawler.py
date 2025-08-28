@@ -1,13 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-import argparse, json, os, time, re, logging, random, asyncio
+import argparse, json, os, time, re, unicodedata, difflib
 from math import ceil
 from pathlib import Path
-from typing import List, Dict, Optional
-from datetime import datetime, timedelta
-import threading
-from collections import deque
+from typing import List, Dict, Optional, Tuple
+from urllib.parse import urljoin, urlparse, quote
 
 # Selenium
 from selenium import webdriver
@@ -19,7 +17,6 @@ from selenium.common.exceptions import (
     TimeoutException,
     NoSuchElementException,
     WebDriverException,
-    StaleElementReferenceException,
 )
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
@@ -27,129 +24,18 @@ from selenium.webdriver.support import expected_conditions as EC
 # Parallelism
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    handlers=[logging.FileHandler("crawler.log"), logging.StreamHandler()],
-)
-
-BASE_URL = (
-    "https://pureportal.coventry.ac.uk/en/organisations/"
-    "fbl-school-of-economics-finance-and-accounting/publications/"
-)
-
-
-# =========================== Performance Monitoring ===========================
-class PerformanceMonitor:
-    def __init__(self):
-        self.start_time = time.time()
-        self.stage_times = {}
-        self.processed_count = 0
-        self.success_count = 0
-        self.error_count = 0
-        self.rate_history = deque(maxlen=10)
-        self.lock = threading.Lock()
-
-    def start_stage(self, stage_name: str):
-        with self.lock:
-            self.stage_times[stage_name] = time.time()
-
-    def end_stage(self, stage_name: str):
-        with self.lock:
-            if stage_name in self.stage_times:
-                duration = time.time() - self.stage_times[stage_name]
-                logging.info(f"[PERF] {stage_name} completed in {duration:.2f}s")
-                return duration
-
-    def record_success(self):
-        with self.lock:
-            self.processed_count += 1
-            self.success_count += 1
-            self._update_rate()
-
-    def record_error(self):
-        with self.lock:
-            self.processed_count += 1
-            self.error_count += 1
-            self._update_rate()
-
-    def _update_rate(self):
-        elapsed = time.time() - self.start_time
-        if elapsed > 0:
-            rate = self.processed_count / elapsed
-            self.rate_history.append(rate)
-
-    def get_stats(self) -> Dict:
-        with self.lock:
-            elapsed = time.time() - self.start_time
-            avg_rate = (
-                sum(self.rate_history) / len(self.rate_history)
-                if self.rate_history
-                else 0
-            )
-            return {
-                "elapsed": elapsed,
-                "processed": self.processed_count,
-                "success": self.success_count,
-                "errors": self.error_count,
-                "success_rate": (
-                    (self.success_count / self.processed_count * 100)
-                    if self.processed_count > 0
-                    else 0
-                ),
-                "items_per_second": avg_rate,
-                "estimated_remaining": 0,
-            }
-
-
-# Global performance monitor
-perf_monitor = PerformanceMonitor()
-
-
-# =========================== Caching System ===========================
-class SimpleCache:
-    def __init__(self, max_size: int = 1000):
-        self.cache = {}
-        self.max_size = max_size
-        self.access_times = {}
-        self.lock = threading.Lock()
-
-    def get(self, key: str) -> Optional[Dict]:
-        with self.lock:
-            if key in self.cache:
-                self.access_times[key] = time.time()
-                return self.cache[key]
-            return None
-
-    def set(self, key: str, value: Dict):
-        with self.lock:
-            if len(self.cache) >= self.max_size:
-                # Remove oldest accessed item
-                oldest_key = min(
-                    self.access_times.keys(), key=lambda k: self.access_times[k]
-                )
-                del self.cache[oldest_key]
-                del self.access_times[oldest_key]
-
-            self.cache[key] = value
-            self.access_times[key] = time.time()
-
-
-# Global cache for failed/processed URLs
-url_cache = SimpleCache()
+# ---------- Config ----------
+PORTAL_ROOT = "https://pureportal.coventry.ac.uk"
+PERSONS_PREFIX = "/en/persons/"
+BASE_URL = f"{PORTAL_ROOT}/en/organisations/fbl-school-of-economics-finance-and-accounting/publications/"
 
 
 # =========================== Chrome helpers ===========================
-def build_chrome_options(
-    headless: bool, legacy_headless: bool = False, fast_mode: bool = False
-) -> Options:
+def build_chrome_options(headless: bool, legacy_headless: bool = False) -> Options:
     opts = Options()
     if headless:
         opts.add_argument("--headless" + ("" if legacy_headless else "=new"))
-
-    # Basic options
-    opts.add_argument("--window-size=1366,768")
+    opts.add_argument("--window-size=1366,900")
     opts.add_argument("--disable-gpu")
     opts.add_argument("--no-sandbox")
     opts.add_argument("--disable-dev-shm-usage")
@@ -159,267 +45,78 @@ def build_chrome_options(
     opts.add_argument("--no-default-browser-check")
     opts.add_argument("--disable-extensions")
     opts.add_argument("--disable-popup-blocking")
-
-    # Performance optimizations
     opts.add_argument("--disable-renderer-backgrounding")
     opts.add_argument("--disable-backgrounding-occluded-windows")
     opts.add_argument("--disable-features=CalculateNativeWinOcclusion,MojoVideoDecoder")
-    opts.add_argument("--disable-ipc-flooding-protection")
-    opts.add_argument("--disable-web-security")
-    opts.add_argument("--disable-features=VizDisplayCompositor")
+    opts.add_argument("--disable-plugins")
+    opts.add_argument("--disable-background-networking")
+    opts.add_argument("--memory-pressure-off")
+    opts.page_load_strategy = "eager"
 
-    # Fast mode optimizations
-    if fast_mode:
-        opts.add_argument("--disable-images")
-        opts.add_argument("--disable-javascript")
-        opts.add_argument("--disable-plugins")
-        opts.add_argument("--disable-java")
-        opts.add_argument("--disable-css")
-        opts.add_argument("--aggressive-cache-discard")
-        opts.add_argument("--memory-pressure-off")
-        opts.page_load_strategy = "none"  # Don't wait for full page load
-    else:
-        opts.page_load_strategy = "eager"
-
-    # Anti-detection measures
+    # Moderate speed optimizations that preserve functionality
+    prefs = {
+        "profile.default_content_setting_values": {
+            "plugins": 2,
+            "popups": 2,
+            "geolocation": 2,
+            "notifications": 2,
+            "media_stream": 2,
+        }
+    }
+    opts.add_experimental_option("prefs", prefs)
     opts.add_argument("--disable-blink-features=AutomationControlled")
     opts.add_experimental_option(
         "excludeSwitches", ["enable-logging", "enable-automation"]
     )
     opts.add_experimental_option("useAutomationExtension", False)
-    opts.add_argument("--disable-logging")
-    opts.add_argument("--log-level=3")
-    opts.add_argument("--silent")
-
-    # Updated User-Agent for 2025
+    opts.page_load_strategy = "eager"
     opts.add_argument(
-        "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+        "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36"
     )
-
-    # Additional prefs to reduce fingerprinting and improve performance
-    prefs = {
-        "profile.default_content_setting_values": {
-            "notifications": 2,
-            "media_stream": 2,
-        },
-        "profile.managed_default_content_settings": {"images": 2 if fast_mode else 1},
-        "profile.default_content_settings.popups": 0,
-        "managed_default_content_settings.images": 2 if fast_mode else 1,
-    }
-    opts.add_experimental_option("prefs", prefs)
-
     return opts
 
 
-def make_driver(
-    headless: bool,
-    legacy_headless: bool = False,
-    fast_mode: bool = False,
-    timeout: int = 15,
-) -> webdriver.Chrome:
-    """Create and configure a Chrome WebDriver instance with enhanced anti-detection."""
+def make_driver(headless: bool, legacy_headless: bool = False) -> webdriver.Chrome:
+    service = ChromeService(ChromeDriverManager().install(), log_output=os.devnull)
+    driver = webdriver.Chrome(
+        service=service, options=build_chrome_options(headless, legacy_headless)
+    )
+    driver.set_page_load_timeout(15)
+    driver.implicitly_wait(0.5)
     try:
-        service = ChromeService(ChromeDriverManager().install(), log_output=os.devnull)
-        driver = webdriver.Chrome(
-            service=service,
-            options=build_chrome_options(headless, legacy_headless, fast_mode),
+        driver.execute_cdp_cmd(
+            "Page.addScriptToEvaluateOnNewDocument",
+            {
+                "source": "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+            },
         )
-        driver.set_page_load_timeout(timeout)  # Reduced from 45s to configurable
-
-        # Enhanced anti-detection scripts
-        try:
-            # Hide webdriver property
-            driver.execute_cdp_cmd(
-                "Page.addScriptToEvaluateOnNewDocument",
-                {
-                    "source": """
-                Object.defineProperty(navigator, 'webdriver', {
-                    get: () => undefined,
-                });
-                """
-                },
-            )
-
-            # Randomize screen resolution and other properties
-            driver.execute_cdp_cmd(
-                "Page.addScriptToEvaluateOnNewDocument",
-                {
-                    "source": """
-                Object.defineProperty(navigator, 'languages', {
-                    get: () => ['en-US', 'en'],
-                });
-                Object.defineProperty(navigator, 'plugins', {
-                    get: () => [1, 2, 3, 4, 5],
-                });
-                """
-                },
-            )
-        except Exception as e:
-            logging.warning(f"Could not execute CDP commands: {e}")
-
-        return driver
-    except Exception as e:
-        logging.error(f"Failed to create driver: {e}")
-        raise
+    except Exception:
+        pass
+    return driver
 
 
 def accept_cookies_if_present(driver: webdriver.Chrome):
-    """Accept cookies banner if present."""
     try:
-        btn = WebDriverWait(driver, 3).until(  # Reduced from 6s to 3s
-            EC.element_to_be_clickable((By.ID, "onetrust-accept-btn-handler"))
+        btn = WebDriverWait(driver, 3).until(
+            EC.presence_of_element_located((By.ID, "onetrust-accept-btn-handler"))
         )
         driver.execute_script("arguments[0].click();", btn)
-        time.sleep(0.1)  # Reduced from 0.25s
-        logging.debug("Accepted cookies banner")
+        time.sleep(0.1)
     except TimeoutException:
-        logging.debug("No cookies banner found")
-    except Exception as e:
-        logging.warning(f"Error handling cookies banner: {e}")
+        pass
+    except Exception:
+        pass
 
 
-def smart_delay(base_delay: float, variance: float = 0.3, fast_mode: bool = False):
-    """Add intelligent delay based on mode and recent performance."""
-    if fast_mode:
-        base_delay *= 0.3  # Reduce delays in fast mode
-
-    # Adaptive delay based on error rate
-    stats = perf_monitor.get_stats()
-    if stats["processed"] > 10:
-        error_rate = stats["errors"] / stats["processed"]
-        if error_rate > 0.1:  # If >10% error rate, slow down
-            base_delay *= 1.5
-        elif error_rate < 0.02:  # If <2% error rate, speed up
-            base_delay *= 0.7
-
-    delay = base_delay + random.uniform(-variance, variance)
-    time.sleep(max(0.05, delay))  # Minimum 50ms delay
-
-
-# =========================== LISTING (Stage 1) ===========================
-def scrape_listing_page(
-    driver: webdriver.Chrome, page_idx: int, max_retries: int = 3
-) -> List[Dict]:
-    """Scrape a single listing page with retry logic."""
-    url = f"{BASE_URL}?page={page_idx}"
-
-    for attempt in range(max_retries):
-        try:
-            logging.info(f"Scraping listing page {page_idx + 1}, attempt {attempt + 1}")
-            driver.get(url)
-            smart_delay(1.0, 0.5)  # Smart delay after page load
-
-            try:
-                WebDriverWait(driver, 15).until(
-                    lambda d: d.find_elements(
-                        By.CSS_SELECTOR, ".result-container h3.title a"
-                    )
-                    or "No results" in d.page_source
-                )
-            except TimeoutException:
-                logging.warning(f"Timeout waiting for page {page_idx + 1} to load")
-
-            cards = driver.find_elements(By.CLASS_NAME, "result-container")
-            rows: List[Dict] = []
-
-            for i, c in enumerate(cards):
-                try:
-                    a = c.find_element(By.CSS_SELECTOR, "h3.title a")
-                    title = a.text.strip()
-                    link = a.get_attribute("href")
-                    if title and link:
-                        rows.append({"title": title, "link": link})
-                except (NoSuchElementException, StaleElementReferenceException) as e:
-                    logging.warning(
-                        f"Error extracting card {i} on page {page_idx + 1}: {e}"
-                    )
-                    continue
-                except Exception as e:
-                    logging.error(
-                        f"Unexpected error on card {i} on page {page_idx + 1}: {e}"
-                    )
-                    continue
-
-            logging.info(
-                f"Successfully extracted {len(rows)} items from page {page_idx + 1}"
-            )
-            return rows
-
-        except WebDriverException as e:
-            logging.error(
-                f"WebDriver error on page {page_idx + 1}, attempt {attempt + 1}: {e}"
-            )
-            if attempt < max_retries - 1:
-                smart_delay(2.0, 1.0)  # Wait before retry
-                continue
-            else:
-                logging.error(
-                    f"Failed to scrape page {page_idx + 1} after {max_retries} attempts"
-                )
-                return []
-        except Exception as e:
-            logging.error(f"Unexpected error on page {page_idx + 1}: {e}")
-            return []
-
-    return []
-
-
-def gather_all_listing_links(
-    max_pages: int, headless_listing: bool = False, legacy_headless: bool = False
-) -> List[Dict]:
-    """Gather all publication links from listing pages."""
-    # Listing works more reliably non-headless
-    driver = make_driver(headless_listing, legacy_headless)
-    try:
-        logging.info(f"Starting to gather links from up to {max_pages} pages")
-        driver.get(BASE_URL)
-        accept_cookies_if_present(driver)
-        smart_delay(1.0)
-
-        all_rows: List[Dict] = []
-        for i in range(max_pages):
-            logging.info(f"[LIST] Processing page {i+1}/{max_pages}")
-            rows = scrape_listing_page(driver, i)
-            if not rows:
-                logging.info(f"[LIST] Empty page at index {i}; stopping early.")
-                break
-            all_rows.extend(rows)
-
-            # Random delay between pages
-            smart_delay(1.5, 0.8)
-
-        # Remove duplicates by link
-        uniq = {}
-        for r in all_rows:
-            uniq[r["link"]] = r
-
-        unique_rows = list(uniq.values())
-        logging.info(
-            f"Collected {len(unique_rows)} unique links from {len(all_rows)} total entries"
-        )
-        return unique_rows
-
-    except Exception as e:
-        logging.error(f"Error in gather_all_listing_links: {e}")
-        return []
-    finally:
-        try:
-            driver.quit()
-            logging.debug("Driver closed successfully")
-        except Exception as e:
-            logging.warning(f"Error closing driver: {e}")
-
-
-# =========================== DETAIL (Stage 2) ===========================
-# author parsing helpers
+# =========================== Utilities ===========================
 FIRST_DIGIT = re.compile(r"\d")
 NAME_PAIR = re.compile(
     r"[A-Z][A-Za-z'’\-]+,\s*(?:[A-Z](?:\.)?)(?:\s*[A-Z](?:\.)?)*", flags=re.UNICODE
 )
+SPACE = re.compile(r"\s+")
 
 
-def _uniq(seq: List[str]) -> List[str]:
+def _uniq_str(seq: List[str]) -> List[str]:
     seen, out = set(), []
     for x in seq:
         x = x.strip()
@@ -427,6 +124,213 @@ def _uniq(seq: List[str]) -> List[str]:
             seen.add(x)
             out.append(x)
     return out
+
+
+def _uniq_authors(
+    objs: List[Dict[str, Optional[str]]],
+) -> List[Dict[str, Optional[str]]]:
+    seen: set[Tuple[str, str]] = set()
+    out: List[Dict[str, Optional[str]]] = []
+    for o in objs:
+        name = (o.get("name") or "").strip()
+        profile = (o.get("profile") or "").strip()
+        key = (name, profile)
+        if name and key not in seen:
+            seen.add(key)
+            out.append({"name": name, "profile": profile or None})
+    return out
+
+
+def _norm(s: str) -> str:
+    s = unicodedata.normalize("NFKD", s)
+    s = "".join(ch for ch in s if not unicodedata.combining(ch))
+    s = re.sub(r"[^\w\s\-']", " ", s, flags=re.UNICODE).strip().lower()
+    return SPACE.sub(" ", s)
+
+
+def _is_person_profile_url(href: str) -> bool:
+    """Accept only /en/persons/<slug> (reject directory / search / empty)."""
+    if not href:
+        return False
+    try:
+        u = urlparse(href)
+    except Exception:
+        return False
+    if u.netloc and "coventry.ac.uk" not in u.netloc:
+        return False
+    path = (u.path or "").rstrip("/")
+    if not path.startswith(PERSONS_PREFIX):
+        return False
+    slug = path[len(PERSONS_PREFIX) :].strip("/")
+    if not slug or slug.startswith("?"):
+        return False
+    return True
+
+
+def _looks_like_person_name(text: str) -> bool:
+    if not text:
+        return False
+    t = text.strip()
+    bad = {"profiles", "persons", "people", "overview"}
+    if t.lower() in bad:
+        return False
+    return ((" " in t) or ("," in t)) and sum(ch.isalpha() for ch in t) >= 4
+
+
+# =========================== LISTING (Stage 1) ===========================
+def scrape_listing_page(driver: webdriver.Chrome, page_idx: int) -> List[Dict]:
+    url = f"{BASE_URL}?page={page_idx}"
+    driver.get(url)
+    accept_cookies_if_present(driver)
+    try:
+        WebDriverWait(driver, 10).until(
+            lambda d: d.find_elements(By.CSS_SELECTOR, ".result-container h3.title a")
+            or "No results" in d.page_source
+        )
+    except TimeoutException:
+        pass
+
+    rows = []
+    for c in driver.find_elements(By.CLASS_NAME, "result-container"):
+        try:
+            a = c.find_element(By.CSS_SELECTOR, "h3.title a")
+            title = a.text.strip()
+            link = a.get_attribute("href")
+            if title and link:
+                rows.append({"title": title, "link": link})
+        except Exception:
+            continue
+    return rows
+
+
+def scrape_single_listing_page(
+    page_idx: int, headless: bool = True, legacy_headless: bool = False
+) -> List[Dict]:
+    """Single page scraper for parallel execution"""
+    driver = make_driver(headless, legacy_headless)
+    try:
+        return scrape_listing_page(driver, page_idx)
+    finally:
+        try:
+            driver.quit()
+        except Exception:
+            pass
+
+
+def gather_all_listing_links(
+    max_pages: int,
+    headless_listing: bool = False,
+    legacy_headless: bool = False,
+    list_workers: int = 4,
+) -> List[Dict]:
+    """Optimized parallel listing collection"""
+    print(
+        f"[STAGE 1] Collecting links from {max_pages} pages with {list_workers} workers..."
+    )
+
+    all_rows: List[Dict] = []
+
+    # Use parallel processing for listing pages
+    with ThreadPoolExecutor(max_workers=list_workers) as executor:
+        future_to_page = {
+            executor.submit(
+                scrape_single_listing_page, i, headless_listing, legacy_headless
+            ): i
+            for i in range(max_pages)
+        }
+
+        completed = 0
+        for future in as_completed(future_to_page):
+            page_idx = future_to_page[future]
+            try:
+                rows = future.result()
+                if rows:
+                    all_rows.extend(rows)
+                    print(f"[LIST] Page {page_idx+1}/{max_pages} → {len(rows)} items")
+                else:
+                    print(
+                        f"[LIST] Page {page_idx+1}/{max_pages} → empty (stopping early)"
+                    )
+                completed += 1
+            except Exception as e:
+                print(f"[LIST] Page {page_idx+1} failed: {e}")
+
+    uniq = {}
+    for r in all_rows:
+        uniq[r["link"]] = r
+    return list(uniq.values())
+
+
+# =========================== DETAIL (Stage 2) ===========================
+def _maybe_expand_authors(driver: webdriver.Chrome):
+    try:
+        for b in driver.find_elements(
+            By.XPATH,
+            "//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'show') or "
+            "contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'more')]",
+        )[:2]:
+            try:
+                driver.execute_script(
+                    "arguments[0].scrollIntoView({block:'center'});", b
+                )
+                time.sleep(0.05)
+                b.click()
+                time.sleep(0.1)
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+
+def _authors_from_header_anchors(driver: webdriver.Chrome) -> List[Dict]:
+    """
+    Grab /en/persons/<slug> anchors ABOVE the tab bar (Overview etc.),
+    reject directory link 'Profiles' and other nav chrome.
+    """
+    # Find Y threshold of tab bar
+    tabs_y = None
+    for xp in [
+        "//a[normalize-space()='Overview']",
+        "//nav[contains(@class,'tabbed-navigation')]",
+        "//div[contains(@class,'navigation') and .//a[contains(.,'Overview')]]",
+    ]:
+        try:
+            el = driver.find_element(By.XPATH, xp)
+            tabs_y = el.location.get("y", None)
+            if tabs_y:
+                break
+        except Exception:
+            continue
+    if tabs_y is None:
+        tabs_y = 900
+
+    candidates: List[Dict[str, Optional[str]]] = []
+    seen = set()
+    for a in driver.find_elements(By.CSS_SELECTOR, "a[href*='/en/persons/']"):
+        try:
+            y = a.location.get("y", 99999)
+            if y >= tabs_y:
+                continue
+            href = (a.get_attribute("href") or "").strip()
+            if not _is_person_profile_url(href):
+                continue
+            try:
+                name = a.find_element(By.CSS_SELECTOR, "span").text.strip()
+            except NoSuchElementException:
+                name = (a.text or "").strip()
+            if not _looks_like_person_name(name):
+                continue
+            key = (name, href)
+            if key in seen:
+                continue
+            seen.add(key)
+            candidates.append(
+                {"name": name, "profile": urljoin(driver.current_url, href)}
+            )
+        except Exception:
+            continue
+
+    return _uniq_authors(candidates)
 
 
 def _get_meta_list(driver: webdriver.Chrome, names_or_props: List[str]) -> List[str]:
@@ -438,7 +342,7 @@ def _get_meta_list(driver: webdriver.Chrome, names_or_props: List[str]) -> List[
             c = (el.get_attribute("content") or "").strip()
             if c:
                 vals.append(c)
-    return _uniq(vals)
+    return _uniq_str(vals)
 
 
 def _extract_authors_jsonld(driver: webdriver.Chrome) -> List[str]:
@@ -471,44 +375,20 @@ def _extract_authors_jsonld(driver: webdriver.Chrome) -> List[str]:
                     names.append(n)
             elif isinstance(auth, str):
                 names.append(auth)
-    return _uniq(names)
-
-
-def _maybe_expand_authors(driver: webdriver.Chrome):
-    try:
-        btns = driver.find_elements(
-            By.XPATH,
-            "//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'show') or "
-            "contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'more')]",
-        )
-        for b in btns[:2]:
-            try:
-                driver.execute_script(
-                    "arguments[0].scrollIntoView({block:'center'});", b
-                )
-                time.sleep(0.15)
-                b.click()
-                time.sleep(0.25)
-            except Exception:
-                continue
-    except Exception:
-        pass
+    return _uniq_str(names)
 
 
 def _authors_from_subtitle_simple(
     driver: webdriver.Chrome, title_text: str
 ) -> List[str]:
     """
-    Use the line containing authors + date:
-    remove the title, keep chars until first digit (date starts),
-    then extract 'Surname, Initials' pairs.
+    Use the subtitle line containing authors + date:
+    strip title, cut before first digit (date), parse 'Surname, Initials' pairs.
     """
     try:
         date_el = driver.find_element(By.CSS_SELECTOR, "span.date")
     except NoSuchElementException:
         return []
-
-    # prefer ancestor with class 'subtitle' (portal markup), else parent
     try:
         subtitle = date_el.find_element(
             By.XPATH, "ancestor::*[contains(@class,'subtitle')][1]"
@@ -518,457 +398,368 @@ def _authors_from_subtitle_simple(
             subtitle = date_el.find_element(By.XPATH, "..")
         except Exception:
             subtitle = None
-
     line = subtitle.text if subtitle else ""
     if title_text and title_text in line:
         line = line.replace(title_text, "")
     line = " ".join(line.split()).strip()
-
     m = FIRST_DIGIT.search(line)
     pre_date = line[: m.start()].strip(" -—–·•,;|") if m else line
     pre_date = pre_date.replace(" & ", ", ").replace(" and ", ", ")
     pairs = NAME_PAIR.findall(pre_date)
-    return _uniq(pairs)
+    return _uniq_str(pairs)
+
+
+def _wrap_names_as_objs(names: List[str]) -> List[Dict]:
+    return _uniq_authors([{"name": n, "profile": None} for n in names])
 
 
 def extract_detail_for_link(
-    driver: webdriver.Chrome,
-    link: str,
-    title_hint: str,
-    delay: float,
-    fast_mode: bool = False,
+    driver: webdriver.Chrome, link: str, title_hint: str
 ) -> Dict:
-    """Extract detailed information for a single publication link."""
+    driver.get(link)
+
     try:
-        logging.debug(f"Extracting details for: {link}")
-        driver.get(link)
-        accept_cookies_if_present(driver)
-        smart_delay(0.5)
+        btn = driver.find_element(By.ID, "onetrust-accept-btn-handler")
+        driver.execute_script("arguments[0].click();", btn)
+    except:
+        pass
 
-        try:
-            WebDriverWait(driver, 20).until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, "h1"))
-            )
-        except TimeoutException:
-            logging.warning(f"Timeout waiting for page to load: {link}")
+    try:
+        WebDriverWait(driver, 8).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, "h1"))
+        )
+    except TimeoutException:
+        time.sleep(1)
 
-        # Title (use detail title if available; else listing hint)
-        try:
-            title = driver.find_element(By.CSS_SELECTOR, "h1").text.strip()
-        except NoSuchElementException:
-            title = title_hint or ""
-            logging.debug(f"Using title hint: {title}")
+    try:
+        title = driver.find_element(By.CSS_SELECTOR, "h1").text.strip()
+    except NoSuchElementException:
+        title = title_hint or ""
 
-        # Try to reveal hidden lists
-        _maybe_expand_authors(driver)
-
-        # AUTHORS: DOM → subtitle simple → meta → JSON-LD
-        authors = []
-        for sel in [
-            ".relations.persons a[href*='/en/persons/'] span",
-            ".relations.persons a[href*='/en/persons/']",
-            "section#persons a[href*='/en/persons/'] span",
-            "section#persons a[href*='/en/persons/']",
-        ]:
+    try:
+        for b in driver.find_elements(
+            By.XPATH,
+            "//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'show') or "
+            "contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'more')]",
+        )[:2]:
             try:
-                for el in driver.find_elements(By.CSS_SELECTOR, sel):
-                    t = el.text.strip()
-                    if t:
-                        authors.append(t)
-                if authors:
-                    break
-            except Exception as e:
-                logging.debug(f"Error extracting authors with selector '{sel}': {e}")
-
-        if not authors:
-            authors = _authors_from_subtitle_simple(driver, title)
-        if not authors:
-            authors = _get_meta_list(
-                driver, ["citation_author", "dc.contributor", "dc.contributor.author"]
-            )
-        if not authors:
-            authors = _extract_authors_jsonld(driver)
-        authors = _uniq(authors)
-
-        # PUBLISHED DATE
-        published_date = None
-        for sel in ["span.date", "time[datetime]", "time"]:
-            try:
-                el = driver.find_element(By.CSS_SELECTOR, sel)
-                published_date = el.get_attribute("datetime") or el.text.strip()
-                if published_date:
-                    break
-            except NoSuchElementException:
+                b.click()
+                time.sleep(0.1)
+            except:
                 continue
-            except Exception as e:
-                logging.debug(f"Error extracting date with selector '{sel}': {e}")
+    except:
+        pass
 
-        if not published_date:
-            metas = _get_meta_list(
-                driver,
-                ["citation_publication_date", "dc.date", "article:published_time"],
-            )
-            if metas:
-                published_date = metas[0]
+    #  AUTHORS: Try main methods efficiently
+    author_objs: List[Dict[str, Optional[str]]] = []
 
-        # ABSTRACT
-        abstract_txt = None
-        for sel in [
-            "section#abstract .textblock",
-            "section.abstract .textblock",
-            "div.abstract .textblock",
-            "div#abstract",
-            "section#abstract",
-            "div.textblock",
-        ]:
-            try:
-                el = driver.find_element(By.CSS_SELECTOR, sel)
+    # Method 1: Header anchors (most reliable)
+    try:
+        author_objs = _authors_from_header_anchors(driver)
+        author_objs = [
+            a
+            for a in author_objs
+            if _looks_like_person_name(a.get("name", ""))
+            and _is_person_profile_url(a.get("profile", ""))
+        ]
+    except:
+        pass
+
+    # Method 2: If no authors found, try subtitle quickly
+    if not author_objs:
+        try:
+            names = _authors_from_subtitle_simple(driver, title)
+            author_objs = _wrap_names_as_objs(names)
+        except:
+            pass
+
+    # Method 3: Quick meta check if still no authors
+    if not author_objs:
+        try:
+            names = _get_meta_list(driver, ["citation_author"])
+            author_objs = _wrap_names_as_objs(names)
+        except:
+            pass
+
+    # FAST DATE EXTRACTION with fallback
+    published_date = None
+    for sel in ["span.date", "time[datetime]", "time"]:
+        try:
+            el = driver.find_element(By.CSS_SELECTOR, sel)
+            published_date = el.get_attribute("datetime") or el.text.strip()
+            if published_date:
+                break
+        except:
+            continue
+
+    abstract_txt = ""
+
+    # Method 1: Try standard abstract selectors
+    abstract_selectors = [
+        "section#abstract .textblock",
+        "section.abstract .textblock",
+        "div.abstract .textblock",
+        "div#abstract .textblock",
+        "section#abstract",
+        "div#abstract",
+        "[data-section='abstract'] .textblock",
+        ".abstract .textblock",
+        ".abstract p",
+        ".abstract div",
+        "div.textblock",
+    ]
+
+    for sel in abstract_selectors:
+        try:
+            elements = driver.find_elements(By.CSS_SELECTOR, sel)
+            for el in elements:
                 txt = el.text.strip()
-                if txt and len(txt) > 15:
+                if len(txt) > 30:
                     abstract_txt = txt
                     break
-            except NoSuchElementException:
-                continue
-            except Exception as e:
-                logging.debug(f"Error extracting abstract with selector '{sel}': {e}")
+            if abstract_txt:
+                break
+        except:
+            continue
 
-        if not abstract_txt:
-            try:
-                hdrs = driver.find_elements(By.CSS_SELECTOR, "h2, h3")
-                for h in hdrs:
-                    if "abstract" in h.text.strip().lower():
-                        nxt = h.find_element(
-                            By.XPATH,
-                            "./following::*[self::div or self::p or self::section][1]",
-                        )
-                        txt = nxt.text.strip()
-                        if txt:
+    # Method 2: Look for heading with "Abstract" and get following content
+    if not abstract_txt:
+        try:
+            abstract_headings = driver.find_elements(
+                By.XPATH,
+                "//h1[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'abstract')] | //h2[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'abstract')] | //h3[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'abstract')] | //h4[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'abstract')]",
+            )
+
+            for h in abstract_headings:
+                # Try multiple ways to get following content
+                for xpath in [
+                    "./following-sibling::div[1]",
+                    "./following-sibling::p[1]",
+                    "./following-sibling::section[1]",
+                    "./following-sibling::*[1]",
+                    "../following-sibling::div[1]",
+                    "./parent::*/following-sibling::div[1]",
+                ]:
+                    try:
+                        next_el = h.find_element(By.XPATH, xpath)
+                        txt = next_el.text.strip()
+                        if len(txt) > 30:
                             abstract_txt = txt
                             break
-            except Exception as e:
-                logging.debug(f"Error extracting abstract from headers: {e}")
+                    except:
+                        continue
+                if abstract_txt:
+                    break
+        except:
+            pass
 
-        smart_delay(delay, delay * 0.3, fast_mode)  # Variable polite delay
+    # Method 3: Look for text nodes that contain substantial content after "Abstract"
+    if not abstract_txt:
+        try:
+            # Find any element containing "Abstract" and try to get text from parent or siblings
+            abstract_elements = driver.find_elements(
+                By.XPATH,
+                "//*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'abstract')]",
+            )
+            for elem in abstract_elements:
+                # Try parent element
+                try:
+                    parent = elem.find_element(By.XPATH, "..")
+                    txt = parent.text.strip()
+                    # Remove the "Abstract" word and get the content after it
+                    if "abstract" in txt.lower():
+                        parts = txt.lower().split("abstract", 1)
+                        if len(parts) > 1:
+                            potential_abstract = parts[1].strip()
+                            if len(potential_abstract) > 30:
+                                abstract_txt = potential_abstract
+                                break
+                except:
+                    continue
+        except:
+            pass
 
-        result = {
-            "title": title,
-            "link": link,
-            "authors": authors,
-            "published_date": published_date,
-            "abstract": abstract_txt or "",
-        }
+    # Method 4: Try meta tags for abstract/description
+    if not abstract_txt:
+        try:
+            meta_selectors = [
+                'meta[name="description"]',
+                'meta[name="abstract"]',
+                'meta[property="og:description"]',
+                'meta[name="citation_abstract"]',
+            ]
+            for sel in meta_selectors:
+                try:
+                    meta = driver.find_element(By.CSS_SELECTOR, sel)
+                    content = meta.get_attribute("content")
+                    if content and len(content.strip()) > 30:
+                        abstract_txt = content.strip()
+                        break
+                except:
+                    continue
+        except:
+            pass
 
-        logging.debug(f"Successfully extracted details for: {title[:50]}...")
-        return result
+    # Method 5: Last resort - look for any substantial text block
+    if not abstract_txt:
+        try:
+            # Find divs or sections with substantial text content
+            text_blocks = driver.find_elements(By.CSS_SELECTOR, "div, section, p")
+            for block in text_blocks:
+                try:
+                    txt = block.text.strip()
+                    # Skip navigation, headers, and other non-content
+                    if (
+                        len(txt) > 100
+                        and "abstract" not in txt.lower()[:50]
+                        and "overview" not in txt.lower()
+                        and "publication" not in txt.lower()
+                        and "author" not in txt.lower()[:20]
+                        and "research" in txt.lower()
+                        and not txt.startswith("©")
+                        and "cookie" not in txt.lower()
+                    ):
+                        abstract_txt = txt[:1000]
+                        break
+                except:
+                    continue
+        except:
+            pass
 
-    except Exception as e:
-        logging.error(f"Error extracting details for {link}: {e}")
-        return {
-            "title": title_hint,
-            "link": link,
-            "authors": [],
-            "published_date": None,
-            "abstract": "",
-        }
+    return {
+        "title": title,
+        "link": link,
+        "authors": _uniq_authors(author_objs),
+        "published_date": published_date,
+        "abstract": abstract_txt,
+    }
 
 
 # =========================== Workers ===========================
 def worker_detail_batch(
-    batch: List[Dict],
-    headless: bool,
-    legacy_headless: bool,
-    delay: float,
-    fast_mode: bool = False,
+    batch: List[Dict], headless: bool, legacy_headless: bool
 ) -> List[Dict]:
-    """Process a batch of detail pages in a single worker."""
-    worker_id = f"worker-{os.getpid()}-{random.randint(1000, 9999)}"
-    logging.info(
-        f"[{worker_id}] Starting batch processing with {len(batch)} items (fast_mode={fast_mode})"
-    )
-
-    driver = None
+    driver = make_driver(headless=headless, legacy_headless=legacy_headless)
     out: List[Dict] = []
-
     try:
-        driver = make_driver(
-            headless=headless,
-            legacy_headless=legacy_headless,
-            fast_mode=fast_mode,
-            timeout=10 if fast_mode else 15,
-        )
-
         for i, it in enumerate(batch, 1):
-            # Check cache first
-            cached_result = url_cache.get(it["link"])
-            if cached_result:
-                out.append(cached_result)
-                perf_monitor.record_success()
-                logging.debug(
-                    f"[{worker_id}] {i}/{len(batch)} ✓ (cached) {cached_result['title'][:60]}..."
-                )
-                continue
-
             try:
-                rec = extract_detail_for_link(
-                    driver, it["link"], it.get("title", ""), delay, fast_mode
-                )
+                rec = extract_detail_for_link(driver, it["link"], it.get("title", ""))
                 out.append(rec)
-                url_cache.set(it["link"], rec)  # Cache successful result
-                perf_monitor.record_success()
-                logging.info(f"[{worker_id}] {i}/{len(batch)} ✓ {rec['title'][:60]}...")
-
-                # More frequent driver refresh in fast mode, less frequent in normal mode
-                refresh_interval = 15 if fast_mode else 25
-                if i % refresh_interval == 0:
-                    logging.debug(f"[{worker_id}] Refreshing driver after {i} pages")
-                    try:
-                        driver.quit()
-                        driver = make_driver(
-                            headless=headless,
-                            legacy_headless=legacy_headless,
-                            fast_mode=fast_mode,
-                            timeout=10 if fast_mode else 15,
-                        )
-                    except Exception as e:
-                        logging.warning(f"[{worker_id}] Error refreshing driver: {e}")
-
-            except WebDriverException as e:
-                logging.error(f"[{worker_id}] WebDriver error for {it['link']}: {e}")
-                perf_monitor.record_error()
-                # Add empty record to maintain data integrity
-                empty_rec = {
-                    "title": it.get("title", ""),
-                    "link": it["link"],
-                    "authors": [],
-                    "published_date": None,
-                    "abstract": "",
-                }
-                out.append(empty_rec)
-                url_cache.set(it["link"], empty_rec)  # Cache failed result too
-                continue
+                if i % 2 == 0:
+                    print(f"[WORKER] {i}/{len(batch)} parsed")
             except Exception as e:
-                logging.error(f"[{worker_id}] Unexpected error for {it['link']}: {e}")
-                perf_monitor.record_error()
-                empty_rec = {
-                    "title": it.get("title", ""),
-                    "link": it["link"],
-                    "authors": [],
-                    "published_date": None,
-                    "abstract": "",
-                }
-                out.append(empty_rec)
-                url_cache.set(it["link"], empty_rec)
+                print(f"[WORKER] ERR {it['link']}: {str(e)[:100]}")
+                # Add minimal record to avoid data loss
+                out.append(
+                    {
+                        "title": it.get("title", ""),
+                        "link": it["link"],
+                        "authors": [],
+                        "published_date": None,
+                        "abstract": "",
+                    }
+                )
                 continue
-
-    except Exception as e:
-        logging.error(f"[{worker_id}] Fatal error in worker: {e}")
     finally:
-        if driver:
-            try:
-                driver.quit()
-                logging.debug(f"[{worker_id}] Driver closed successfully")
-            except Exception as e:
-                logging.warning(f"[{worker_id}] Error closing driver: {e}")
-
-    logging.info(f"[{worker_id}] Completed batch: {len(out)} results")
+        try:
+            driver.quit()
+        except Exception:
+            pass
     return out
 
 
 def chunk(items: List[Dict], n: int) -> List[List[Dict]]:
+    """Optimized chunking for better parallelism"""
     if n <= 1:
         return [items]
-    size = ceil(len(items) / n)
+    # Create smaller chunks for better parallelism
+    size = max(3, ceil(len(items) / (n * 2)))
     return [items[i : i + size] for i in range(0, len(items), size)]
 
 
 # =========================== Orchestrator ===========================
 def main():
     ap = argparse.ArgumentParser(
-        description="Coventry PurePortal scraper (listing → details: authors + abstract + date)."
+        description="OPTIMIZED Coventry PurePortal scraper (listing → details, clean author links)."
     )
-    ap.add_argument("--outdir", default="../data", help="Output directory for results")
+    ap.add_argument("--outdir", default="../data")
     ap.add_argument(
-        "--max-pages",
-        type=int,
-        default=50,
-        help="Max listing pages to scan (stops early on empty).",
+        "--max-pages", type=int, default=50, help="Max listing pages to scan."
     )
     ap.add_argument(
         "--workers",
         type=int,
-        default=12,  # Increased from 8 to 12
+        default=15,
         help="Parallel headless browsers for detail pages.",
     )
     ap.add_argument(
-        "--delay",
-        type=float,
-        default=0.15,
-        help="Per-detail polite delay (seconds). Reduced from 0.35 for faster crawling.",
+        "--list-workers",
+        type=int,
+        default=4,
+        help="Parallel workers for listing pages.",
     )
     ap.add_argument(
-        "--listing-headless",
-        action="store_true",
-        help="Run listing headless (not recommended).",
+        "--listing-headless", action="store_true", help="Run listing headless."
     )
     ap.add_argument(
-        "--legacy-headless",
-        action="store_true",
-        help="Use legacy --headless instead of --headless=new.",
-    )
-    ap.add_argument(
-        "--log-level",
-        default="INFO",
-        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
-        help="Set logging level",
-    )
-    ap.add_argument(
-        "--fast-mode",
-        action="store_true",
-        help="Enable fast mode: disable images, CSS, JS for faster crawling",
-    )
-    ap.add_argument(
-        "--resume",
-        action="store_true",
-        help="Resume from existing publications_links.json if available",
-    )
-    ap.add_argument(
-        "--progress",
-        action="store_true",
-        help="Show detailed progress information during crawling",
+        "--legacy-headless", action="store_true", help="Use legacy --headless."
     )
     args = ap.parse_args()
-
-    # Set logging level
-    logging.getLogger().setLevel(getattr(logging, args.log_level))
 
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
 
-    # Performance optimizations based on mode
-    if args.fast_mode:
-        logging.info(
-            "🚀 FAST MODE ENABLED: Disabling images, CSS, JS for maximum speed"
-        )
-        args.delay = min(args.delay, 0.1)  # Cap delay at 100ms in fast mode
-
-    # Resume functionality
-    links_file = outdir / "publications_links.json"
-    listing = []
-
-    if args.resume and links_file.exists():
-        logging.info(f"📁 RESUME MODE: Loading existing links from {links_file}")
-        try:
-            with open(links_file, "r", encoding="utf-8") as f:
-                listing = json.load(f)
-            logging.info(f"✅ Loaded {len(listing)} existing links")
-        except Exception as e:
-            logging.error(f"❌ Failed to load existing links: {e}")
-            listing = []
-
-    logging.info(
-        f"🚀 Starting crawler: {args.workers} workers, max {args.max_pages} pages, {args.delay}s delay"
-    )
-    logging.info(f"📂 Output directory: {outdir.absolute()}")
-    if args.fast_mode:
-        logging.info("⚡ Fast mode: Images/CSS/JS disabled")
-
-    # Start performance monitoring
-    perf_monitor.start_stage("total_crawl")
-
-    # -------- Stage 1: listing (skip if resuming)
-    if not listing:
-        perf_monitor.start_stage("listing")
-        logging.info(f"[STAGE 1] 🔍 Collecting links (up to {args.max_pages} pages)…")
-        listing = gather_all_listing_links(
-            args.max_pages,
-            headless_listing=args.listing_headless,
-            legacy_headless=args.legacy_headless,
-        )
-        if not listing:
-            logging.error("❌ No publications found on listing pages.")
-            return
-
-        links_file.write_text(json.dumps(listing, indent=2), encoding="utf-8")
-        logging.info(
-            f"[STAGE 1] ✅ Collected {len(listing)} unique links → {links_file}"
-        )
-        perf_monitor.end_stage("listing")
-    else:
-        logging.info(
-            f"[STAGE 1] ⏭️  Skipped (resuming with {len(listing)} existing links)"
-        )
-
-    # -------- Stage 2: details (parallel)
-    perf_monitor.start_stage("details")
-    logging.info(f"[STAGE 2] 🔄 Scraping details with {args.workers} workers…")
-    if args.fast_mode:
-        logging.info("⚡ Fast mode active: Expect 2-3x faster processing")
-
-    batches = chunk(listing, args.workers)
-    results: List[Dict] = []
-
     start_time = time.time()
 
-    # Progress monitoring thread
-    def progress_monitor():
-        while True:
-            time.sleep(10)  # Update every 10 seconds
-            stats = perf_monitor.get_stats()
-            if stats["processed"] > 0:
-                eta = (
-                    ((len(listing) - stats["processed"]) / stats["items_per_second"])
-                    if stats["items_per_second"] > 0
-                    else 0
-                )
-                logging.info(
-                    f"📊 Progress: {stats['processed']}/{len(listing)} "
-                    f"({stats['success_rate']:.1f}% success) "
-                    f"@ {stats['items_per_second']:.1f} items/s "
-                    f"ETA: {eta/60:.1f}m"
-                )
+    # -------- Stage 1: Optimized parallel listing
+    print(f"[STAGE 1] Collecting links (up to {args.max_pages} pages)…")
+    listing = gather_all_listing_links(
+        args.max_pages,
+        headless_listing=args.listing_headless,
+        legacy_headless=args.legacy_headless,
+        list_workers=args.list_workers,
+    )
+    stage1_time = time.time() - start_time
+    print(f"[STAGE 1] Collected {len(listing)} unique links in {stage1_time:.1f}s.")
 
-    if args.progress:
-        progress_thread = threading.Thread(target=progress_monitor, daemon=True)
-        progress_thread.start()
+    # Ensure data directory exists
+    if not listing:
+        print("No publications found on listing pages.")
+        return
 
-    with ThreadPoolExecutor(max_workers=args.workers) as ex:
+    (outdir / "publications_links.json").write_text(
+        json.dumps(listing, indent=2), encoding="utf-8"
+    )
+
+    # -------- Stage 2: details (parallel; no per-item sleep)
+    print(f"[STAGE 2] Scraping details with {args.workers} headless workers…")
+    stage2_start = time.time()
+    batches = chunk(listing, max(1, args.workers))
+    results: List[Dict] = []
+    with ThreadPoolExecutor(max_workers=max(1, args.workers)) as ex:
         futs = [
-            ex.submit(
-                worker_detail_batch,
-                batch,
-                True,
-                args.legacy_headless,
-                args.delay,
-                args.fast_mode,
-            )
+            ex.submit(worker_detail_batch, batch, True, args.legacy_headless)
             for batch in batches
         ]
         done = 0
         for fut in as_completed(futs):
-            try:
-                part = fut.result() or []
-                results.extend(part)
-                done += 1
-                elapsed = time.time() - start_time
-                stats = perf_monitor.get_stats()
-                logging.info(
-                    f"[STAGE 2] ✅ Batch {done}/{len(batches)} (+{len(part)} items) "
-                    f"- Elapsed: {elapsed:.1f}s @ {stats['items_per_second']:.1f}/s"
-                )
-            except Exception as e:
-                logging.error(f"❌ Worker batch failed: {e}")
-                done += 1
+            part = fut.result() or []
+            results.extend(part)
+            done += 1
+            print(
+                f"[STAGE 2] Completed {done}/{len(batches)} batches (+{len(part)} items)"
+            )
 
-    perf_monitor.end_stage("details")
+    stage2_time = time.time() - stage2_start
+    total_time = time.time() - start_time
 
-    # -------- Save with enhanced reporting
-    logging.info(f"[STAGE 3] 💾 Saving results...")
-    # de-dupe by link; prefer detail results
+    # -------- Save (prefer detail results)
     by_link: Dict[str, Dict] = {}
     for it in listing:
         by_link[it["link"]] = {"title": it["title"], "link": it["link"]}
     for rec in results:
-        by_link[rec["link"]] = rec  # overwrite with full detail
+        by_link[rec["link"]] = rec
 
     final_rows = list(by_link.values())
     out_path = outdir / "publications.json"
@@ -976,44 +767,20 @@ def main():
         json.dumps(final_rows, ensure_ascii=False, indent=2), encoding="utf-8"
     )
 
-    # Final performance report
-    perf_monitor.end_stage("total_crawl")
-    total_time = time.time() - start_time
-    final_stats = perf_monitor.get_stats()
-
-    logging.info("=" * 60)
-    logging.info("🎉 CRAWLING COMPLETED!")
-    logging.info(f"📊 Final Results:")
-    logging.info(f"   • Total records: {len(final_rows)}")
-    logging.info(f"   • Successful extractions: {final_stats['success']}")
-    logging.info(f"   • Failed extractions: {final_stats['errors']}")
-    logging.info(f"   • Success rate: {final_stats['success_rate']:.1f}%")
-    logging.info(
-        f"   • Average speed: {final_stats['items_per_second']:.1f} items/second"
-    )
-    logging.info(f"   • Total time: {total_time:.1f}s ({total_time/60:.1f} minutes)")
-    logging.info(
-        f"   • Time saved vs default: ~{((770 * 0.35 + 300) - total_time)/60:.1f} minutes"
-    )
-    logging.info(f"📁 Saved to: {out_path}")
-    logging.info("=" * 60)
-
-    # Save performance stats
-    stats_path = outdir / "performance_stats.json"
-    stats_path.write_text(
-        json.dumps(
-            {
-                **final_stats,
-                "total_time": total_time,
-                "total_records": len(final_rows),
-                "fast_mode": args.fast_mode,
-                "workers": args.workers,
-                "delay": args.delay,
-            },
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
+    # Performance summary
+    print(f"\n{'='*60}")
+    print(f"[PERFORMANCE SUMMARY]")
+    print(f"Total items processed: {len(final_rows)}")
+    print(f"Stage 1 (listing): {stage1_time:.1f}s")
+    print(f"Stage 2 (details): {stage2_time:.1f}s")
+    print(f"Total time: {total_time:.1f}s")
+    print(f"Average time per item: {total_time/len(final_rows):.2f}s")
+    print(f"Items per minute: {(len(final_rows) * 60 / total_time):.1f}")
+    if len(final_rows) >= 50:
+        time_for_50_pages = (50 * total_time) / (len(final_rows) / args.max_pages)
+        print(f"Estimated time for 50 pages: ~{time_for_50_pages/60:.1f} minutes")
+    print(f"[DONE] Saved {len(final_rows)} records → {out_path}")
+    print(f"{'='*60}")
 
 
 if __name__ == "__main__":
