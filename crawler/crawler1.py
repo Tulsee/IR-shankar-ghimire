@@ -48,11 +48,10 @@ def build_chrome_options(headless: bool, legacy_headless: bool = False) -> Optio
     opts.add_argument("--disable-renderer-backgrounding")
     opts.add_argument("--disable-backgrounding-occluded-windows")
     opts.add_argument("--disable-features=CalculateNativeWinOcclusion,MojoVideoDecoder")
-    # Performance optimizations
     opts.add_argument("--disable-plugins")
     opts.add_argument("--disable-background-networking")
     opts.add_argument("--memory-pressure-off")
-    opts.page_load_strategy = "eager"  # Balanced loading strategy
+    opts.page_load_strategy = "eager"
 
     # Moderate speed optimizations that preserve functionality
     prefs = {
@@ -82,8 +81,8 @@ def make_driver(headless: bool, legacy_headless: bool = False) -> webdriver.Chro
     driver = webdriver.Chrome(
         service=service, options=build_chrome_options(headless, legacy_headless)
     )
-    driver.set_page_load_timeout(15)  # Reduced from 30 to 15
-    driver.implicitly_wait(0.5)  # Reduced to 0.5 seconds
+    driver.set_page_load_timeout(15)
+    driver.implicitly_wait(0.5)
     try:
         driver.execute_cdp_cmd(
             "Page.addScriptToEvaluateOnNewDocument",
@@ -98,11 +97,11 @@ def make_driver(headless: bool, legacy_headless: bool = False) -> webdriver.Chro
 
 def accept_cookies_if_present(driver: webdriver.Chrome):
     try:
-        btn = WebDriverWait(driver, 3).until(  # Reduced from 6 to 3
+        btn = WebDriverWait(driver, 3).until(
             EC.presence_of_element_located((By.ID, "onetrust-accept-btn-handler"))
         )
         driver.execute_script("arguments[0].click();", btn)
-        time.sleep(0.1)  # Reduced from 0.2
+        time.sleep(0.1)
     except TimeoutException:
         pass
     except Exception:
@@ -184,7 +183,7 @@ def scrape_listing_page(driver: webdriver.Chrome, page_idx: int) -> List[Dict]:
     driver.get(url)
     accept_cookies_if_present(driver)
     try:
-        WebDriverWait(driver, 10).until(  # Reduced from 15 to 10
+        WebDriverWait(driver, 10).until(
             lambda d: d.find_elements(By.CSS_SELECTOR, ".result-container h3.title a")
             or "No results" in d.page_source
         )
@@ -274,9 +273,9 @@ def _maybe_expand_authors(driver: webdriver.Chrome):
                 driver.execute_script(
                     "arguments[0].scrollIntoView({block:'center'});", b
                 )
-                time.sleep(0.05)  # Reduced from 0.1
+                time.sleep(0.05)
                 b.click()
-                time.sleep(0.1)  # Reduced from 0.2
+                time.sleep(0.1)
             except Exception:
                 continue
     except Exception:
@@ -303,7 +302,7 @@ def _authors_from_header_anchors(driver: webdriver.Chrome) -> List[Dict]:
         except Exception:
             continue
     if tabs_y is None:
-        tabs_y = 900  # conservative fallback
+        tabs_y = 900
 
     candidates: List[Dict[str, Optional[str]]] = []
     seen = set()
@@ -419,46 +418,39 @@ def extract_detail_for_link(
 ) -> Dict:
     driver.get(link)
 
-    # Ultra-fast cookie handling
     try:
         btn = driver.find_element(By.ID, "onetrust-accept-btn-handler")
         driver.execute_script("arguments[0].click();", btn)
     except:
         pass
 
-    # Minimal wait but ensure basic elements are loaded
     try:
-        WebDriverWait(driver, 8).until(  # Slightly increased for reliability
+        WebDriverWait(driver, 8).until(
             EC.presence_of_element_located((By.CSS_SELECTOR, "h1"))
         )
     except TimeoutException:
-        # Allow a bit more time for slow pages
         time.sleep(1)
 
-    # Quick title extraction
     try:
         title = driver.find_element(By.CSS_SELECTOR, "h1").text.strip()
     except NoSuchElementException:
         title = title_hint or ""
 
-    # Faster author expansion - reduce delays but keep it working
     try:
         for b in driver.find_elements(
             By.XPATH,
             "//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'show') or "
             "contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'more')]",
-        )[
-            :2
-        ]:  # Try up to 2 buttons
+        )[:2]:
             try:
                 b.click()
-                time.sleep(0.1)  # Small delay for content to load
+                time.sleep(0.1)
             except:
                 continue
     except:
         pass
 
-    # OPTIMIZED AUTHORS: Try main methods efficiently
+    #  AUTHORS: Try main methods efficiently
     author_objs: List[Dict[str, Optional[str]]] = []
 
     # Method 1: Header anchors (most reliable)
@@ -500,7 +492,6 @@ def extract_detail_for_link(
         except:
             continue
 
-    # ENHANCED ABSTRACT EXTRACTION - comprehensive approach
     abstract_txt = ""
 
     # Method 1: Try standard abstract selectors
@@ -515,7 +506,7 @@ def extract_detail_for_link(
         ".abstract .textblock",
         ".abstract p",
         ".abstract div",
-        "div.textblock",  # Fallback for general textblock
+        "div.textblock",
     ]
 
     for sel in abstract_selectors:
@@ -523,7 +514,7 @@ def extract_detail_for_link(
             elements = driver.find_elements(By.CSS_SELECTOR, sel)
             for el in elements:
                 txt = el.text.strip()
-                if len(txt) > 30:  # Slightly higher threshold
+                if len(txt) > 30:
                     abstract_txt = txt
                     break
             if abstract_txt:
@@ -620,8 +611,7 @@ def extract_detail_for_link(
                     # Skip navigation, headers, and other non-content
                     if (
                         len(txt) > 100
-                        and "abstract"
-                        not in txt.lower()[:50]  # Skip if starts with "Abstract"
+                        and "abstract" not in txt.lower()[:50]
                         and "overview" not in txt.lower()
                         and "publication" not in txt.lower()
                         and "author" not in txt.lower()[:20]
@@ -629,7 +619,7 @@ def extract_detail_for_link(
                         and not txt.startswith("©")
                         and "cookie" not in txt.lower()
                     ):
-                        abstract_txt = txt[:1000]  # Limit length
+                        abstract_txt = txt[:1000]
                         break
                 except:
                     continue
@@ -656,7 +646,7 @@ def worker_detail_batch(
             try:
                 rec = extract_detail_for_link(driver, it["link"], it.get("title", ""))
                 out.append(rec)
-                if i % 2 == 0:  # More frequent progress reports
+                if i % 2 == 0:
                     print(f"[WORKER] {i}/{len(batch)} parsed")
             except Exception as e:
                 print(f"[WORKER] ERR {it['link']}: {str(e)[:100]}")
@@ -684,7 +674,7 @@ def chunk(items: List[Dict], n: int) -> List[List[Dict]]:
     if n <= 1:
         return [items]
     # Create smaller chunks for better parallelism
-    size = max(3, ceil(len(items) / (n * 2)))  # Smaller chunks
+    size = max(3, ceil(len(items) / (n * 2)))
     return [items[i : i + size] for i in range(0, len(items), size)]
 
 
@@ -700,13 +690,13 @@ def main():
     ap.add_argument(
         "--workers",
         type=int,
-        default=15,  # Increased default workers for stage 2
+        default=15,
         help="Parallel headless browsers for detail pages.",
     )
     ap.add_argument(
         "--list-workers",
         type=int,
-        default=4,  # New parameter for listing workers
+        default=4,
         help="Parallel workers for listing pages.",
     )
     ap.add_argument(

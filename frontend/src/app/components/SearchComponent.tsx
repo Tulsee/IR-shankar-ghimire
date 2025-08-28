@@ -447,7 +447,7 @@ function PublicationCard({ publication }: { publication: Publication }) {
 
               {publication.score > 0 && (
                 <div className="bg-gradient-to-r from-blue-100 to-indigo-100 text-blue-800 px-3 py-2 rounded-full text-sm font-semibold border border-blue-200">
-                  <span className="text-xs">Relevance</span> {(publication.score * 100).toFixed(1)}%
+                  <span className="text-xs">Relevance</span> {publication.score}
                 </div>
               )}
             </div>
